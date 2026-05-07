@@ -22,6 +22,7 @@ from query_understanding import analisar_pergunta
 from reranking_service import reranquear_resultados
 from search_service import buscar_chunks_hibrido
 
+
 def consolidar_chunks(documentos: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Junta os chunks de todos os documentos em uma única lista.
@@ -92,9 +93,11 @@ def carregar_dados_aplicacao(
     }
 
     if deve_carregar_embeddings(modo_busca):
-        embeddings_chunks, estatisticas_embeddings = carregar_ou_gerar_embeddings_documentos(
-            documentos=documentos,
-            nome_modelo=nome_modelo,
+        embeddings_chunks, estatisticas_embeddings = (
+            carregar_ou_gerar_embeddings_documentos(
+                documentos=documentos,
+                nome_modelo=nome_modelo,
+            )
         )
 
     return {
@@ -122,7 +125,9 @@ def filtrar_chunks_por_arquivo(
     return [chunk for chunk in chunks if chunk["arquivo"] in arquivos_set]
 
 
-def criar_array_embeddings_vazio(embeddings_chunks: np.ndarray | None) -> np.ndarray:
+def criar_array_embeddings_vazio(
+    embeddings_chunks: np.ndarray | None,
+) -> np.ndarray:
     """
     Cria um array vazio compatível com a dimensão dos embeddings existentes.
     """
@@ -201,6 +206,7 @@ def carregar_modelo_semantico_cached(
     """
     return carregar_modelo_embeddings(nome_modelo=nome_modelo)
 
+
 def calcular_top_k_inicial(
     top_k_final: int,
     multiplicador_candidatos: int,
@@ -209,6 +215,7 @@ def calcular_top_k_inicial(
     Define quantos candidatos devem ser recuperados antes do reranking.
     """
     return max(top_k_final, top_k_final * multiplicador_candidatos)
+
 
 def executar_busca_documentos(
     pergunta: str,
@@ -221,7 +228,7 @@ def executar_busca_documentos(
     nome_modelo: str = DEFAULT_EMBEDDING_MODEL,
 ) -> list[dict[str, Any]]:
     """
-    Executa a busca com três etapas:
+    Executa a busca em três etapas:
     1) entendimento da pergunta
     2) recuperação inicial de candidatos
     3) reranking final dos melhores candidatos

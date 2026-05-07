@@ -26,7 +26,7 @@ def carregar_modelo_reranking(
     nome_modelo: str = DEFAULT_RERANKER_MODEL,
 ) -> CrossEncoder:
     """
-    Carrega o modelo de reranking sob demanda e reutiliza em memória.
+    Carrega o modelo de reranking sob demanda e o mantém em cache.
     """
     try:
         from sentence_transformers import CrossEncoder as _CrossEncoder
@@ -39,9 +39,23 @@ def carregar_modelo_reranking(
     return _CrossEncoder(nome_modelo)
 
 
+def validar_pesos(
+    peso_reranker: float,
+    peso_score_inicial: float,
+) -> None:
+    """
+    Garante que os pesos usados na composição final são válidos.
+    """
+    if peso_reranker < 0 or peso_score_inicial < 0:
+        raise ValueError("Os pesos do reranking não podem ser negativos.")
+
+    if np.isclose(peso_reranker + peso_score_inicial, 0.0):
+        raise ValueError("A soma dos pesos do reranking deve ser maior que zero.")
+
+
 def obter_campo_score_inicial(resultados: Sequence[ChunkResultado]) -> str:
     """
-    Descobre qual campo de score deve ser usado como base.
+    Descobre qual campo de score deve ser usado como score base.
     """
     campos_prioritarios = (
         "score_hibrido",
@@ -80,7 +94,7 @@ def montar_pares_pergunta_chunk(
     resultados: Sequence[ChunkResultado],
 ) -> list[tuple[str, str]]:
     """
-    Cria os pares (pergunta, chunk) usados pelo CrossEncoder.
+    Cria os pares (pergunta, chunk) que serão avaliados pelo CrossEncoder.
     """
     return [
         (pergunta, item.get("chunk", ""))
@@ -90,7 +104,7 @@ def montar_pares_pergunta_chunk(
 
 def contem_numero(texto: str) -> bool:
     """
-    Verifica se o trecho contém números, datas ou percentuais.
+    Verifica se o texto contém números, datas ou percentuais.
     """
     return bool(re.search(r"\d", texto or ""))
 
@@ -100,7 +114,7 @@ def calcular_bonus_intencao(
     resultado: ChunkResultado,
 ) -> float:
     """
-    Pequenos bônus heurísticos para alinhar o resultado ao tipo de pergunta.
+    Aplica pequenos bônus heurísticos conforme a intenção da pergunta.
     """
     intencao = analise_pergunta.get("intencao", "geral")
     texto_chunk = resultado.get("chunk", "")
@@ -143,7 +157,7 @@ def calcular_score_final_rerankeado(
     bonus_intencao: float,
 ) -> float:
     """
-    Combina o reranker com o score inicial do pipeline.
+    Combina score do reranker com o score base da busca.
     """
     score = (
         score_reranker_normalizado * peso_reranker
@@ -151,20 +165,6 @@ def calcular_score_final_rerankeado(
         + bonus_intencao
     )
     return round(float(score), 4)
-
-
-def validar_pesos(
-    peso_reranker: float,
-    peso_score_inicial: float,
-) -> None:
-    """
-    Garante que os pesos são válidos.
-    """
-    if peso_reranker < 0 or peso_score_inicial < 0:
-        raise ValueError("Os pesos do reranking não podem ser negativos.")
-
-    if np.isclose(peso_reranker + peso_score_inicial, 0.0):
-        raise ValueError("A soma dos pesos do reranking deve ser maior que zero.")
 
 
 def reranquear_resultados(
@@ -179,6 +179,13 @@ def reranquear_resultados(
 ) -> list[ChunkResultado]:
     """
     Reranqueia os resultados iniciais usando um CrossEncoder.
+
+    Fluxo:
+    1. recebe os candidatos já recuperados
+    2. avalia cada par (pergunta, chunk) com o CrossEncoder
+    3. combina o score do reranker com o score inicial da busca
+    4. aplica pequenos bônus conforme a intenção da pergunta
+    5. devolve os top_k melhores resultados
     """
     if not resultados:
         return []
@@ -197,12 +204,15 @@ def reranquear_resultados(
     )
 
     scores_reranker = modelo.predict(
-        sentences=pairs,
+        sentences=pares,
         batch_size=batch_size,
         show_progress_bar=False,
     )
 
-    scores_reranker_lista = [float(score) for score in np.asarray(scores_reranker).reshape(-1)]
+    scores_reranker_lista = [
+        float(score)
+        for score in np.asarray(scores_reranker).reshape(-1)
+    ]
     scores_iniciais = [
         float(item.get(campo_score_inicial, 0.0))
         for item in resultados
@@ -250,7 +260,7 @@ def reranquear_resultados(
             item["score_final_rerankeado"],
             item["score_reranker_normalizado"],
             item["score_inicial_normalizado"],
-            -item["indice"],
+            -item.get("indice", 0),
         ),
         reverse=True,
     )
