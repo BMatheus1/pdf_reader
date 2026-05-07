@@ -123,7 +123,7 @@ def combinar_resultados_hibridos(
     bonus_presenca_dupla: float = DEFAULT_DOUBLE_PRESENCE_BONUS,
 ) -> list[ChunkResultado]:
     """
-    Junta resultados lexicais e semânticos em uma única lista reranqueada.
+    Junta resultados lexicais e semânticos em uma única lista ordenada.
     """
     validar_pesos_busca(
         peso_lexical=peso_lexical,
@@ -232,9 +232,14 @@ def buscar_chunks_hibrido(
     peso_semantico: float = DEFAULT_SEMANTIC_WEIGHT,
     bonus_presenca_dupla: float = DEFAULT_DOUBLE_PRESENCE_BONUS,
     multiplicador_candidatos: int = DEFAULT_CANDIDATE_MULTIPLIER,
+    pergunta_lexical: str | None = None,
+    pergunta_semantica: str | None = None,
 ) -> list[ChunkResultado]:
     """
-    Executa busca híbrida: lexical + semântica + reranking final.
+    Executa busca híbrida:
+    1) busca lexical
+    2) busca semântica
+    3) combinação dos dois rankings
     """
     if not pergunta or not pergunta.strip():
         return []
@@ -242,18 +247,21 @@ def buscar_chunks_hibrido(
     if not chunks or embeddings_chunks.size == 0:
         return []
 
+    consulta_lexical = (pergunta_lexical or pergunta).strip()
+    consulta_semantica = (pergunta_semantica or pergunta).strip()
+
     top_k_candidatos = calcular_top_k_candidatos(
         top_k=top_k,
         multiplicador_candidatos=multiplicador_candidatos,
     )
 
     resultados_lexicais = buscar_chunks_lexical(
-        pergunta=pergunta,
+        pergunta=consulta_lexical,
         chunks=chunks,
         top_k=top_k_candidatos,
     )
     resultados_semanticos = buscar_chunks_semantico(
-        pergunta=pergunta,
+        pergunta=consulta_semantica,
         chunks=chunks,
         embeddings_chunks=embeddings_chunks,
         modelo=modelo,

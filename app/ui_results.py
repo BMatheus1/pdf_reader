@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
+from answer_service import gerar_resposta_com_evidencias
 from ui_highlight import destacar_termos_html
 
 
@@ -98,6 +101,9 @@ def obter_score_principal(resultado: dict, modo_busca: str) -> tuple[str, float]
     """
     Define qual score principal deve ser exibido para cada modo de busca.
     """
+    if "score_final_rerankeado" in resultado:
+        return "Score final", float(resultado.get("score_final_rerankeado", 0.0))
+
     if modo_busca == "Lexical":
         return "Score lexical", float(resultado.get("score", 0.0))
 
@@ -105,6 +111,12 @@ def obter_score_principal(resultado: dict, modo_busca: str) -> tuple[str, float]
         return "Score semântico", float(resultado.get("score_semantico", 0.0))
 
     return "Score híbrido", float(resultado.get("score_hibrido", 0.0))
+
+def formatar_paginas(paginas: list[int]) -> str:
+    """
+    Formata a lista de páginas para exibição amigável.
+    """
+    return ", ".join(str(pagina) for pagina in paginas)
 
 
 def renderizar_metadados_resultado(resultado: dict, modo_busca: str) -> None:
@@ -136,6 +148,73 @@ def renderizar_metadados_resultado(resultado: dict, modo_busca: str) -> None:
             f"semântico: {resultado.get('score_semantico', 0.0):.4f}"
         )
 
+    if "descricao_intencao" in resultado:
+        st.caption(f"Leitura da pergunta: {resultado['descricao_intencao']}")
+
+    if "score_reranker" in resultado:
+        st.caption(
+            "Reranking — "
+            f"cross-encoder: {resultado.get('score_reranker_normalizado', 0.0):.4f} | "
+            f"base: {resultado.get('score_inicial_normalizado', 0.0):.4f} | "
+            f"bônus intenção: {resultado.get('bonus_intencao', 0.0):.4f}"
+        )
+        
+def renderizar_fontes_utilizadas(fontes: list[dict]) -> None:
+    """
+    Exibe a lista de fontes usadas na resposta sugerida.
+    """
+    st.markdown("**Fontes usadas na resposta**")
+
+    for fonte in fontes:
+        paginas = formatar_paginas(fonte["paginas"])
+        st.markdown(
+            f"- `{fonte['arquivo']}` • páginas {paginas} • trechos usados: {fonte['quantidade_trechos']}"
+        )
+
+
+def renderizar_trechos_apoio(trechos_apoio: list[dict], pergunta: str) -> None:
+    """
+    Exibe os trechos que sustentam a resposta sugerida.
+    """
+    with st.expander("Ver trechos de apoio", expanded=False):
+        for posicao, resultado in enumerate(trechos_apoio, start=1):
+            st.markdown(
+                f"**{posicao}. {resultado['arquivo']} • pág. {resultado['pagina']}**"
+            )
+            trecho_html = destacar_termos_html(resultado["chunk"], pergunta)
+            st.markdown(
+                f'<div class="result-box subtle-box">{trecho_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+
+def renderizar_resposta_sugerida(resultados: list[dict], pergunta: str) -> None:
+    """
+    Exibe uma resposta curta com fontes e trechos de apoio.
+    """
+    resposta = gerar_resposta_com_evidencias(
+        pergunta=pergunta,
+        resultados=resultados,
+    )
+
+    st.subheader("🧠 Resposta sugerida")
+    st.caption(
+        "Síntese automática baseada apenas nos trechos recuperados pela busca. "
+        "Use as fontes e os trechos de apoio para validar a interpretação."
+    )
+
+    resposta_html = html.escape(resposta["resposta_curta"]).replace("\n", "<br>")
+    st.markdown(
+        f'<div class="result-box subtle-box">{resposta_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+    renderizar_fontes_utilizadas(resposta["fontes"])
+    renderizar_trechos_apoio(
+        trechos_apoio=resposta["trechos_apoio"],
+        pergunta=pergunta,
+    )
+
 
 def renderizar_resultados_busca(
     resultados: list[dict],
@@ -143,13 +222,19 @@ def renderizar_resultados_busca(
     modo_busca: str,
 ) -> None:
     """
-    Renderiza os resultados da busca com destaque visual dos termos relevantes.
+    Renderiza a resposta sugerida e os resultados detalhados da busca.
     """
-    st.subheader("🔎 Resultados da busca")
-
     if not resultados:
+        st.subheader("🔎 Resultados da busca")
         renderizar_estado_sem_resultados()
         return
+
+    renderizar_resposta_sugerida(
+        resultados=resultados,
+        pergunta=pergunta,
+    )
+
+    st.subheader("🔎 Resultados detalhados")
 
     for posicao, resultado in enumerate(resultados, start=1):
         nome_score, score_principal = obter_score_principal(resultado, modo_busca)

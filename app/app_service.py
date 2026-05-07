@@ -5,7 +5,10 @@ from typing import Any
 
 import numpy as np
 
-from config import DEFAULT_EMBEDDING_MODEL
+from config import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_RERANKER_MODEL,
+)
 from embeddings import (
     buscar_chunks_semantico,
     carregar_modelo_embeddings,
@@ -15,8 +18,9 @@ from index_storage import (
     carregar_ou_processar_documentos,
 )
 from lexical_search import buscar_chunks_lexical
+from query_understanding import analisar_pergunta
+from reranking_service import reranquear_resultados
 from search_service import buscar_chunks_hibrido
-
 
 def consolidar_chunks(documentos: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
@@ -197,6 +201,14 @@ def carregar_modelo_semantico_cached(
     """
     return carregar_modelo_embeddings(nome_modelo=nome_modelo)
 
+def calcular_top_k_inicial(
+    top_k_final: int,
+    multiplicador_candidatos: int,
+) -> int:
+    """
+    Define quantos candidatos devem ser recuperados antes do reranking.
+    """
+    return max(top_k_final, top_k_final * multiplicador_candidatos)
 
 def executar_busca_documentos(
     pergunta: str,
@@ -209,7 +221,10 @@ def executar_busca_documentos(
     nome_modelo: str = DEFAULT_EMBEDDING_MODEL,
 ) -> list[dict[str, Any]]:
     """
-    Executa a busca conforme o modo escolhido.
+    Executa a busca com três etapas:
+    1) entendimento da pergunta
+    2) recuperação inicial de candidatos
+    3) reranking final dos melhores candidatos
     """
     if not pergunta or not pergunta.strip():
         return []
@@ -217,11 +232,24 @@ def executar_busca_documentos(
     if not chunks:
         return []
 
+    analise_pergunta = analisar_pergunta(pergunta)
+    top_k_inicial = calcular_top_k_inicial(
+        top_k_final=top_k,
+        multiplicador_candidatos=int(analise_pergunta["multiplicador_candidatos"]),
+    )
+
     if modo_busca == "Lexical":
-        return buscar_chunks_lexical(
-            pergunta=pergunta,
+        resultados_iniciais = buscar_chunks_lexical(
+            pergunta=analise_pergunta["consulta_lexical"],
             chunks=chunks,
+            top_k=top_k_inicial,
+        )
+        return reranquear_resultados(
+            pergunta=analise_pergunta["pergunta_original"],
+            resultados=resultados_iniciais,
+            analise_pergunta=analise_pergunta,
             top_k=top_k,
+            nome_modelo=DEFAULT_RERANKER_MODEL,
         )
 
     if embeddings_chunks is None or embeddings_chunks.size == 0:
@@ -230,23 +258,40 @@ def executar_busca_documentos(
     modelo = carregar_modelo_semantico_cached(nome_modelo)
 
     if modo_busca == "Semântica":
-        return buscar_chunks_semantico(
-            pergunta=pergunta,
+        resultados_iniciais = buscar_chunks_semantico(
+            pergunta=analise_pergunta["consulta_semantica"],
             chunks=chunks,
             embeddings_chunks=embeddings_chunks,
             modelo=modelo,
+            top_k=top_k_inicial,
+        )
+        return reranquear_resultados(
+            pergunta=analise_pergunta["pergunta_original"],
+            resultados=resultados_iniciais,
+            analise_pergunta=analise_pergunta,
             top_k=top_k,
+            nome_modelo=DEFAULT_RERANKER_MODEL,
         )
 
     if modo_busca == "Híbrida":
-        return buscar_chunks_hibrido(
-            pergunta=pergunta,
+        resultados_iniciais = buscar_chunks_hibrido(
+            pergunta=analise_pergunta["pergunta_original"],
+            pergunta_lexical=analise_pergunta["consulta_lexical"],
+            pergunta_semantica=analise_pergunta["consulta_semantica"],
             chunks=chunks,
             embeddings_chunks=embeddings_chunks,
             modelo=modelo,
             top_k=top_k,
             peso_lexical=peso_lexical,
             peso_semantico=peso_semantico,
+            multiplicador_candidatos=int(analise_pergunta["multiplicador_candidatos"]),
+        )
+        return reranquear_resultados(
+            pergunta=analise_pergunta["pergunta_original"],
+            resultados=resultados_iniciais,
+            analise_pergunta=analise_pergunta,
+            top_k=top_k,
+            nome_modelo=DEFAULT_RERANKER_MODEL,
         )
 
     return []
