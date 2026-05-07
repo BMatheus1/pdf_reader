@@ -1,24 +1,38 @@
-from typing import Sequence
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from config import DEFAULT_EMBEDDING_MODEL
 
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+else:
+    SentenceTransformer = Any
 
 
 def carregar_modelo_embeddings(
     nome_modelo: str = DEFAULT_EMBEDDING_MODEL,
 ) -> SentenceTransformer:
     """
-    Carrega e retorna o modelo de embeddings.
+    Carrega o modelo de embeddings somente quando ele realmente for necessário.
+    Isso evita quebrar testes que não dependem da busca semântica.
     """
-    return SentenceTransformer(nome_modelo)
+    try:
+        from sentence_transformers import SentenceTransformer as _SentenceTransformer
+    except ImportError as exc:
+        raise ImportError(
+            "A busca semântica/híbrida exige o pacote 'sentence-transformers'. "
+            "Instale com: pip install sentence-transformers"
+        ) from exc
+
+    return _SentenceTransformer(nome_modelo)
 
 
 def extrair_textos_chunks(chunks: Sequence[dict]) -> list[str]:
     """
-    Extrai apenas os textos dos chunks.
+    Extrai apenas o texto de cada chunk.
     """
     return [item["chunk"] for item in chunks]
 
@@ -29,7 +43,7 @@ def gerar_embeddings_textos(
     batch_size: int = 32,
 ) -> np.ndarray:
     """
-    Gera embeddings normalizados para uma lista de textos.
+    Gera embeddings normalizados para uma sequência de textos.
     """
     if not textos:
         return np.empty((0, 0), dtype=np.float32)
@@ -51,12 +65,11 @@ def gerar_embeddings_chunks(
     batch_size: int = 32,
 ) -> np.ndarray:
     """
-    Gera embeddings para os chunks do documento.
+    Gera embeddings para todos os chunks.
     """
-    textos_chunks = extrair_textos_chunks(chunks)
     return gerar_embeddings_textos(
         modelo=modelo,
-        textos=textos_chunks,
+        textos=extrair_textos_chunks(chunks),
         batch_size=batch_size,
     )
 
@@ -85,12 +98,26 @@ def calcular_similaridades_cosseno(
     embeddings_chunks: np.ndarray,
 ) -> np.ndarray:
     """
-    Calcula similaridade por produto escalar entre vetores já normalizados.
+    Calcula a similaridade entre a pergunta e os chunks.
+    Como os vetores já estão normalizados, o produto escalar equivale ao cosseno.
     """
     if embedding_pergunta.size == 0 or embeddings_chunks.size == 0:
         return np.array([], dtype=np.float32)
 
     return np.dot(embeddings_chunks, embedding_pergunta).astype(np.float32)
+
+
+def validar_correspondencia_chunks_embeddings(
+    chunks: Sequence[dict],
+    embeddings_chunks: np.ndarray,
+) -> None:
+    """
+    Garante que a quantidade de embeddings corresponda à quantidade de chunks.
+    """
+    if len(chunks) != len(embeddings_chunks):
+        raise ValueError(
+            "A quantidade de chunks e embeddings deve ser a mesma."
+        )
 
 
 def buscar_chunks_semantico(
@@ -106,16 +133,13 @@ def buscar_chunks_semantico(
     if not pergunta or not pergunta.strip():
         return []
 
-    if not chunks:
+    if not chunks or embeddings_chunks.size == 0:
         return []
 
-    if embeddings_chunks.size == 0:
-        return []
-
-    if len(chunks) != len(embeddings_chunks):
-        raise ValueError(
-            "A quantidade de chunks e embeddings deve ser a mesma."
-        )
+    validar_correspondencia_chunks_embeddings(
+        chunks=chunks,
+        embeddings_chunks=embeddings_chunks,
+    )
 
     embedding_pergunta = gerar_embedding_pergunta(
         modelo=modelo,
@@ -131,11 +155,12 @@ def buscar_chunks_semantico(
         return []
 
     indices_ordenados = np.argsort(similaridades)[::-1][:top_k]
-    resultados = []
+    resultados: list[dict] = []
 
     for indice_array in indices_ordenados:
-        item = chunks[int(indice_array)]
-        score = float(similaridades[int(indice_array)])
+        indice = int(indice_array)
+        item = chunks[indice]
+        score = float(similaridades[indice])
 
         resultados.append(
             {

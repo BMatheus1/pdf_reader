@@ -1,4 +1,4 @@
-streamlit
-pypdf
-numpy
-sentence-transformers
+streamlit>=1.35
+pypdf>=4.2
+numpy>=1.26
+sentence-transformers>=3.0

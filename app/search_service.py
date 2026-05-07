@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from config import (
+    DEFAULT_CANDIDATE_MULTIPLIER,
+    DEFAULT_DOUBLE_PRESENCE_BONUS,
+    DEFAULT_LEXICAL_WEIGHT,
+    DEFAULT_SEMANTIC_WEIGHT,
+)
 from embeddings import buscar_chunks_semantico
 from lexical_search import buscar_chunks_lexical
 
-
-DEFAULT_PESO_LEXICAL = 0.4
-DEFAULT_PESO_SEMANTICO = 0.6
-DEFAULT_BONUS_PRESENCA_DUPLA = 0.08
-DEFAULT_MULTIPLICADOR_CANDIDATOS = 3
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+else:
+    SentenceTransformer = Any
 
 ChunkResultado = dict[str, Any]
 
@@ -35,7 +39,7 @@ def normalizar_scores_min_max(
     campo_score_normalizado: str,
 ) -> list[ChunkResultado]:
     """
-    Normaliza scores no intervalo [0, 1] usando min-max.
+    Normaliza scores para o intervalo [0, 1].
     """
     if not resultados:
         return []
@@ -65,38 +69,24 @@ def validar_pesos_busca(
     peso_semantico: float,
 ) -> None:
     """
-    Valida os pesos da busca híbrida.
+    Valida os pesos usados na composição do score híbrido.
     """
     if peso_lexical < 0 or peso_semantico < 0:
         raise ValueError("Os pesos da busca híbrida não podem ser negativos.")
 
-    soma_pesos = peso_lexical + peso_semantico
-
-    if np.isclose(soma_pesos, 0.0):
+    if np.isclose(peso_lexical + peso_semantico, 0.0):
         raise ValueError("A soma dos pesos da busca híbrida deve ser maior que zero.")
 
 
-def criar_mapa_resultados_lexicais(
-    resultados_lexicais: Sequence[ChunkResultado],
+def criar_mapa_resultados(
+    resultados: Sequence[ChunkResultado],
 ) -> dict[tuple, ChunkResultado]:
     """
-    Indexa os resultados lexicais pela chave única do chunk.
+    Indexa resultados pela chave estável do chunk.
     """
     return {
         gerar_chave_unica_chunk(item): item
-        for item in resultados_lexicais
-    }
-
-
-def criar_mapa_resultados_semanticos(
-    resultados_semanticos: Sequence[ChunkResultado],
-) -> dict[tuple, ChunkResultado]:
-    """
-    Indexa os resultados semânticos pela chave única do chunk.
-    """
-    return {
-        gerar_chave_unica_chunk(item): item
-        for item in resultados_semanticos
+        for item in resultados
     }
 
 
@@ -128,12 +118,12 @@ def calcular_score_hibrido(
 def combinar_resultados_hibridos(
     resultados_lexicais: Sequence[ChunkResultado],
     resultados_semanticos: Sequence[ChunkResultado],
-    peso_lexical: float = DEFAULT_PESO_LEXICAL,
-    peso_semantico: float = DEFAULT_PESO_SEMANTICO,
-    bonus_presenca_dupla: float = DEFAULT_BONUS_PRESENCA_DUPLA,
+    peso_lexical: float = DEFAULT_LEXICAL_WEIGHT,
+    peso_semantico: float = DEFAULT_SEMANTIC_WEIGHT,
+    bonus_presenca_dupla: float = DEFAULT_DOUBLE_PRESENCE_BONUS,
 ) -> list[ChunkResultado]:
     """
-    Une resultados lexicais e semânticos em uma única lista reranqueada.
+    Junta resultados lexicais e semânticos em uma única lista reranqueada.
     """
     validar_pesos_busca(
         peso_lexical=peso_lexical,
@@ -145,15 +135,14 @@ def combinar_resultados_hibridos(
         campo_score_origem="score",
         campo_score_normalizado="score_lexical_normalizado",
     )
-
     semanticos_normalizados = normalizar_scores_min_max(
         resultados=resultados_semanticos,
         campo_score_origem="score_semantico",
         campo_score_normalizado="score_semantico_normalizado",
     )
 
-    mapa_lexical = criar_mapa_resultados_lexicais(lexicais_normalizados)
-    mapa_semantico = criar_mapa_resultados_semanticos(semanticos_normalizados)
+    mapa_lexical = criar_mapa_resultados(lexicais_normalizados)
+    mapa_semantico = criar_mapa_resultados(semanticos_normalizados)
 
     chaves_unicas = set(mapa_lexical) | set(mapa_semantico)
     resultados_hibridos: list[ChunkResultado] = []
@@ -183,28 +172,24 @@ def combinar_resultados_hibridos(
             else 0.0
         )
 
-        score_hibrido = calcular_score_hibrido(
-            score_lexical_normalizado=score_lexical_normalizado,
-            score_semantico_normalizado=score_semantico_normalizado,
-            peso_lexical=peso_lexical,
-            peso_semantico=peso_semantico,
-            bonus_presenca_dupla=bonus_presenca_dupla,
-            apareceu_no_lexical=apareceu_no_lexical,
-            apareceu_no_semantico=apareceu_no_semantico,
-        )
-
-        termos_encontrados = []
-        if item_lexical:
-            termos_encontrados = list(item_lexical.get("termos_encontrados", []))
-
         item_base.update(
             {
-                "score_hibrido": score_hibrido,
+                "score_hibrido": calcular_score_hibrido(
+                    score_lexical_normalizado=score_lexical_normalizado,
+                    score_semantico_normalizado=score_semantico_normalizado,
+                    peso_lexical=peso_lexical,
+                    peso_semantico=peso_semantico,
+                    bonus_presenca_dupla=bonus_presenca_dupla,
+                    apareceu_no_lexical=apareceu_no_lexical,
+                    apareceu_no_semantico=apareceu_no_semantico,
+                ),
                 "score_lexical": round(score_lexical, 4),
                 "score_semantico": round(score_semantico, 4),
                 "score_lexical_normalizado": round(score_lexical_normalizado, 4),
                 "score_semantico_normalizado": round(score_semantico_normalizado, 4),
-                "termos_encontrados": termos_encontrados,
+                "termos_encontrados": list(item_lexical.get("termos_encontrados", []))
+                if item_lexical
+                else [],
                 "origens_ranking": {
                     "lexical": apareceu_no_lexical,
                     "semantico": apareceu_no_semantico,
@@ -229,7 +214,7 @@ def combinar_resultados_hibridos(
 
 def calcular_top_k_candidatos(
     top_k: int,
-    multiplicador_candidatos: int = DEFAULT_MULTIPLICADOR_CANDIDATOS,
+    multiplicador_candidatos: int = DEFAULT_CANDIDATE_MULTIPLIER,
 ) -> int:
     """
     Define quantos candidatos cada busca deve retornar antes do reranking.
@@ -243,10 +228,10 @@ def buscar_chunks_hibrido(
     embeddings_chunks: np.ndarray,
     modelo: SentenceTransformer,
     top_k: int = 5,
-    peso_lexical: float = DEFAULT_PESO_LEXICAL,
-    peso_semantico: float = DEFAULT_PESO_SEMANTICO,
-    bonus_presenca_dupla: float = DEFAULT_BONUS_PRESENCA_DUPLA,
-    multiplicador_candidatos: int = DEFAULT_MULTIPLICADOR_CANDIDATOS,
+    peso_lexical: float = DEFAULT_LEXICAL_WEIGHT,
+    peso_semantico: float = DEFAULT_SEMANTIC_WEIGHT,
+    bonus_presenca_dupla: float = DEFAULT_DOUBLE_PRESENCE_BONUS,
+    multiplicador_candidatos: int = DEFAULT_CANDIDATE_MULTIPLIER,
 ) -> list[ChunkResultado]:
     """
     Executa busca híbrida: lexical + semântica + reranking final.
@@ -254,7 +239,7 @@ def buscar_chunks_hibrido(
     if not pergunta or not pergunta.strip():
         return []
 
-    if not chunks:
+    if not chunks or embeddings_chunks.size == 0:
         return []
 
     top_k_candidatos = calcular_top_k_candidatos(
@@ -267,7 +252,6 @@ def buscar_chunks_hibrido(
         chunks=chunks,
         top_k=top_k_candidatos,
     )
-
     resultados_semanticos = buscar_chunks_semantico(
         pergunta=pergunta,
         chunks=chunks,

@@ -5,8 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from config import DEFAULT_EMBEDDING_MODEL
 from embeddings import (
-    DEFAULT_EMBEDDING_MODEL,
     buscar_chunks_semantico,
     carregar_modelo_embeddings,
 )
@@ -55,6 +55,13 @@ def montar_resumo_geral(
     }
 
 
+def deve_carregar_embeddings(modo_busca: str) -> bool:
+    """
+    Define se a busca atual depende de embeddings.
+    """
+    return modo_busca in {"Híbrida", "Semântica"}
+
+
 def carregar_dados_aplicacao(
     arquivos_pdf,
     tamanho_chunk: int,
@@ -74,17 +81,17 @@ def carregar_dados_aplicacao(
     chunks = consolidar_chunks(documentos)
     resumo_geral = montar_resumo_geral(documentos, chunks)
 
-    if modo_busca in {"Híbrida", "Semântica"}:
+    embeddings_chunks: np.ndarray | None = None
+    estatisticas_embeddings = {
+        "embeddings_carregados_do_disco": 0,
+        "embeddings_gerados_agora": 0,
+    }
+
+    if deve_carregar_embeddings(modo_busca):
         embeddings_chunks, estatisticas_embeddings = carregar_ou_gerar_embeddings_documentos(
             documentos=documentos,
             nome_modelo=nome_modelo,
         )
-    else:
-        embeddings_chunks = None
-        estatisticas_embeddings = {
-            "embeddings_carregados_do_disco": 0,
-            "embeddings_gerados_agora": 0,
-        }
 
     return {
         "documentos": documentos,
@@ -102,12 +109,23 @@ def filtrar_chunks_por_arquivo(
 ) -> list[dict[str, Any]]:
     """
     Filtra os chunks pelos arquivos selecionados.
+    Se nenhum arquivo for informado, devolve todos.
     """
     if not arquivos_selecionados:
-        return []
+        return chunks
 
     arquivos_set = set(arquivos_selecionados)
     return [chunk for chunk in chunks if chunk["arquivo"] in arquivos_set]
+
+
+def criar_array_embeddings_vazio(embeddings_chunks: np.ndarray | None) -> np.ndarray:
+    """
+    Cria um array vazio compatível com a dimensão dos embeddings existentes.
+    """
+    if embeddings_chunks is None or embeddings_chunks.ndim != 2:
+        return np.empty((0, 0), dtype=np.float32)
+
+    return np.empty((0, embeddings_chunks.shape[1]), dtype=np.float32)
 
 
 def filtrar_chunks_e_embeddings_por_arquivo(
@@ -121,8 +139,10 @@ def filtrar_chunks_e_embeddings_por_arquivo(
     if embeddings_chunks is None:
         return filtrar_chunks_por_arquivo(chunks, arquivos_selecionados), None
 
-    arquivos_set = set(arquivos_selecionados)
+    if not arquivos_selecionados:
+        return chunks, embeddings_chunks
 
+    arquivos_set = set(arquivos_selecionados)
     pares_filtrados = [
         (chunk, embedding)
         for chunk, embedding in zip(chunks, embeddings_chunks)
@@ -130,7 +150,7 @@ def filtrar_chunks_e_embeddings_por_arquivo(
     ]
 
     if not pares_filtrados:
-        return [], np.empty((0, 0), dtype=np.float32)
+        return [], criar_array_embeddings_vazio(embeddings_chunks)
 
     chunks_filtrados = [item[0] for item in pares_filtrados]
     embeddings_filtrados = np.vstack(
@@ -147,9 +167,9 @@ def preparar_base_busca(
     modo_busca: str,
 ) -> dict[str, Any]:
     """
-    Prepara a base de dados que será usada pela busca.
+    Prepara a base que será usada na busca.
     """
-    if modo_busca in {"Híbrida", "Semântica"}:
+    if deve_carregar_embeddings(modo_busca):
         chunks_filtrados, embeddings_filtrados = filtrar_chunks_e_embeddings_por_arquivo(
             chunks=chunks,
             embeddings_chunks=embeddings_chunks,
