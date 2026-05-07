@@ -328,6 +328,70 @@ def montar_metadata_embeddings(
         "shape_embeddings": list(embeddings.shape),
     }
 
+def metadata_embeddings_valida(
+    metadata: dict[str, Any],
+    documento: dict[str, Any],
+    nome_modelo: str,
+    embeddings: np.ndarray,
+) -> bool:
+    """
+    Valida se os metadados persistidos ainda correspondem ao documento atual.
+    """
+    if metadata.get("schema_version") != INDEX_SCHEMA_VERSION:
+        return False
+
+    if metadata.get("documento_id") != documento["documento_id"]:
+        return False
+
+    if metadata.get("nome_modelo") != nome_modelo:
+        return False
+
+    if metadata.get("quantidade_chunks") != len(documento["chunks"]):
+        return False
+
+    if metadata.get("shape_embeddings") != list(embeddings.shape):
+        return False
+
+    return True
+
+def carregar_embeddings_persistidos_validos(
+    documento: dict[str, Any],
+    nome_modelo: str,
+) -> np.ndarray | None:
+    """
+    Carrega embeddings persistidos apenas se os arquivos e metadados estiverem válidos.
+    """
+    caminho_embeddings = obter_caminho_embeddings_documento(
+        documento_id=documento["documento_id"],
+        tamanho_chunk=documento["tamanho_chunk"],
+        overlap_chunk=documento["overlap_chunk"],
+        nome_modelo=nome_modelo,
+    )
+    caminho_metadata = obter_caminho_metadata_embeddings_documento(
+        documento_id=documento["documento_id"],
+        tamanho_chunk=documento["tamanho_chunk"],
+        overlap_chunk=documento["overlap_chunk"],
+        nome_modelo=nome_modelo,
+    )
+
+    if not caminho_embeddings.exists() or not caminho_metadata.exists():
+        return None
+
+    try:
+        embeddings = carregar_embeddings_do_disco(caminho_embeddings)
+        metadata = carregar_json(caminho_metadata)
+    except Exception:
+        return None
+
+    if not metadata_embeddings_valida(
+        metadata=metadata,
+        documento=documento,
+        nome_modelo=nome_modelo,
+        embeddings=embeddings,
+    ):
+        return None
+
+    return embeddings
 
 def carregar_ou_gerar_embeddings_documentos(
     documentos: Sequence[dict[str, Any]],
@@ -348,6 +412,16 @@ def carregar_ou_gerar_embeddings_documentos(
         if not documento.get("chunks"):
             continue
 
+        embeddings = carregar_embeddings_persistidos_validos(
+            documento=documento,
+            nome_modelo=nome_modelo,
+        )
+
+        if embeddings is not None:
+            arrays_embeddings.append(embeddings)
+            estatisticas["embeddings_carregados_do_disco"] += 1
+            continue
+
         caminho_embeddings = obter_caminho_embeddings_documento(
             documento_id=documento["documento_id"],
             tamanho_chunk=documento["tamanho_chunk"],
@@ -360,12 +434,6 @@ def carregar_ou_gerar_embeddings_documentos(
             overlap_chunk=documento["overlap_chunk"],
             nome_modelo=nome_modelo,
         )
-
-        if caminho_embeddings.exists():
-            embeddings = carregar_embeddings_do_disco(caminho_embeddings)
-            arrays_embeddings.append(embeddings)
-            estatisticas["embeddings_carregados_do_disco"] += 1
-            continue
 
         if modelo is None:
             modelo = carregar_modelo_embeddings(nome_modelo)
