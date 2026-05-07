@@ -15,7 +15,8 @@ def renderizar_cabecalho() -> None:
     st.title("📄 PDF Reader Inteligente")
     st.write(
         "Pesquise em um ou mais PDFs com busca lexical, semântica ou híbrida. "
-        "O foco aqui é encontrar trechos úteis com contexto e origem clara."
+        "A aplicação recupera trechos relevantes, reranqueia os melhores candidatos "
+        "e exibe uma resposta curta com evidências rastreáveis."
     )
 
 
@@ -24,9 +25,9 @@ def renderizar_ajuda_inicial() -> None:
     Exibe instruções iniciais para orientar o usuário.
     """
     st.info(
-        "Envie um ou mais PDFs e depois faça perguntas como: "
-        "'qual é o prazo?', 'o que o documento diz sobre estabilidade?' "
-        "ou 'onde fala de plano de saúde?'."
+        "Envie um ou mais PDFs e faça perguntas como: "
+        "'qual é o prazo?', 'onde fala de estabilidade?', "
+        "'resuma os principais pontos' ou 'quais são as condições?'."
     )
 
 
@@ -93,13 +94,15 @@ def renderizar_estado_sem_resultados() -> None:
     """
     st.warning(
         "Nenhum resultado relevante foi encontrado. "
-        "Tente usar termos mais específicos ou reduzir o filtro de arquivos."
+        "Tente usar termos mais específicos, buscar em menos arquivos "
+        "ou reformular a pergunta."
     )
 
 
 def obter_score_principal(resultado: dict, modo_busca: str) -> tuple[str, float]:
     """
-    Define qual score principal deve ser exibido para cada modo de busca.
+    Define qual score principal deve ser exibido.
+    Se houver reranking, o score final passa a ser o principal.
     """
     if "score_final_rerankeado" in resultado:
         return "Score final", float(resultado.get("score_final_rerankeado", 0.0))
@@ -112,6 +115,7 @@ def obter_score_principal(resultado: dict, modo_busca: str) -> tuple[str, float]
 
     return "Score híbrido", float(resultado.get("score_hibrido", 0.0))
 
+
 def formatar_paginas(paginas: list[int]) -> str:
     """
     Formata a lista de páginas para exibição amigável.
@@ -119,46 +123,6 @@ def formatar_paginas(paginas: list[int]) -> str:
     return ", ".join(str(pagina) for pagina in paginas)
 
 
-def renderizar_metadados_resultado(resultado: dict, modo_busca: str) -> None:
-    """
-    Exibe metadados auxiliares do resultado encontrado.
-    """
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.caption(f"Arquivo: {resultado['arquivo']}")
-
-    with col2:
-        st.caption(f"Página: {resultado['pagina']}")
-
-    with col3:
-        st.caption(
-            f"Palavras {resultado['inicio_palavra']}–{resultado['fim_palavra']}"
-        )
-
-    if modo_busca == "Lexical":
-        termos = resultado.get("termos_encontrados", [])
-        if termos:
-            st.caption("Termos encontrados: " + ", ".join(termos))
-
-    if modo_busca == "Híbrida":
-        st.caption(
-            "Composição do ranking — "
-            f"lexical: {resultado.get('score_lexical', 0.0):.4f} | "
-            f"semântico: {resultado.get('score_semantico', 0.0):.4f}"
-        )
-
-    if "descricao_intencao" in resultado:
-        st.caption(f"Leitura da pergunta: {resultado['descricao_intencao']}")
-
-    if "score_reranker" in resultado:
-        st.caption(
-            "Reranking — "
-            f"cross-encoder: {resultado.get('score_reranker_normalizado', 0.0):.4f} | "
-            f"base: {resultado.get('score_inicial_normalizado', 0.0):.4f} | "
-            f"bônus intenção: {resultado.get('bonus_intencao', 0.0):.4f}"
-        )
-        
 def renderizar_fontes_utilizadas(fontes: list[dict]) -> None:
     """
     Exibe a lista de fontes usadas na resposta sugerida.
@@ -190,7 +154,8 @@ def renderizar_trechos_apoio(trechos_apoio: list[dict], pergunta: str) -> None:
 
 def renderizar_resposta_sugerida(resultados: list[dict], pergunta: str) -> None:
     """
-    Exibe uma resposta curta com fontes e trechos de apoio.
+    Exibe uma resposta curta baseada nos resultados reranqueados,
+    com fontes e trechos de apoio.
     """
     resposta = gerar_resposta_com_evidencias(
         pergunta=pergunta,
@@ -216,6 +181,48 @@ def renderizar_resposta_sugerida(resultados: list[dict], pergunta: str) -> None:
     )
 
 
+def renderizar_metadados_resultado(resultado: dict, modo_busca: str) -> None:
+    """
+    Exibe metadados auxiliares do resultado encontrado.
+    """
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.caption(f"Arquivo: {resultado['arquivo']}")
+
+    with col2:
+        st.caption(f"Página: {resultado['pagina']}")
+
+    with col3:
+        st.caption(
+            f"Palavras {resultado['inicio_palavra']}–{resultado['fim_palavra']}"
+        )
+
+    if "descricao_intencao" in resultado:
+        st.caption(f"Leitura da pergunta: {resultado['descricao_intencao']}")
+
+    if modo_busca == "Lexical":
+        termos = resultado.get("termos_encontrados", [])
+        if termos:
+            st.caption("Termos encontrados: " + ", ".join(termos))
+
+    if modo_busca == "Híbrida":
+        if "score_lexical" in resultado or "score_semantico" in resultado:
+            st.caption(
+                "Composição da busca — "
+                f"lexical: {resultado.get('score_lexical', 0.0):.4f} | "
+                f"semântico: {resultado.get('score_semantico', 0.0):.4f}"
+            )
+
+    if "score_reranker" in resultado:
+        st.caption(
+            "Reranking — "
+            f"cross-encoder: {resultado.get('score_reranker_normalizado', 0.0):.4f} | "
+            f"base: {resultado.get('score_inicial_normalizado', 0.0):.4f} | "
+            f"bônus intenção: {resultado.get('bonus_intencao', 0.0):.4f}"
+        )
+
+
 def renderizar_resultados_busca(
     resultados: list[dict],
     pergunta: str,
@@ -224,8 +231,9 @@ def renderizar_resultados_busca(
     """
     Renderiza a resposta sugerida e os resultados detalhados da busca.
     """
+    st.subheader("🔎 Resultados da busca")
+
     if not resultados:
-        st.subheader("🔎 Resultados da busca")
         renderizar_estado_sem_resultados()
         return
 
@@ -234,10 +242,12 @@ def renderizar_resultados_busca(
         pergunta=pergunta,
     )
 
-    st.subheader("🔎 Resultados detalhados")
+    st.markdown("---")
+    st.subheader("📚 Resultados detalhados")
 
     for posicao, resultado in enumerate(resultados, start=1):
         nome_score, score_principal = obter_score_principal(resultado, modo_busca)
+
         titulo = (
             f"{posicao}. {resultado['arquivo']} • pág. {resultado['pagina']} • "
             f"{nome_score}: {score_principal:.4f}"
@@ -245,8 +255,11 @@ def renderizar_resultados_busca(
 
         with st.expander(titulo, expanded=(posicao == 1)):
             renderizar_metadados_resultado(resultado, modo_busca)
-            trecho_html = destacar_termos_html(resultado["chunk"], pergunta)
 
+            trecho_html = destacar_termos_html(
+                resultado["chunk"],
+                pergunta,
+            )
             st.markdown(
                 f'<div class="result-box subtle-box">{trecho_html}</div>',
                 unsafe_allow_html=True,
