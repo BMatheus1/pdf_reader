@@ -1,0 +1,10 @@
+.venv
+__pycache__
+.pytest_cache
+.dev_ai_workspace_index
+.git
+.gitignore
+*.pyc
+*.pyo
+*.pyd
+*.log

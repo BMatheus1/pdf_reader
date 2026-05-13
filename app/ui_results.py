@@ -15,8 +15,8 @@ def renderizar_cabecalho() -> None:
     st.title("📄 PDF Reader Inteligente")
     st.write(
         "Pesquise em um ou mais PDFs com busca lexical, semântica ou híbrida. "
-        "A aplicação recupera trechos relevantes, reranqueia os melhores candidatos "
-        "e exibe uma resposta curta com evidências rastreáveis."
+        "A aplicação recupera trechos relevantes e exibe uma resposta curta "
+        "com fontes rastreáveis."
     )
 
 
@@ -93,16 +93,21 @@ def renderizar_estado_sem_resultados() -> None:
     Exibe uma mensagem amigável quando a busca não retorna trechos relevantes.
     """
     st.warning(
-        "Nenhum resultado relevante foi encontrado. "
-        "Tente usar termos mais específicos, buscar em menos arquivos "
-        "ou reformular a pergunta."
+        "Nenhum resultado relevante foi encontrado para essa pergunta."
+    )
+
+    st.caption("Tente uma destas abordagens:")
+    st.markdown(
+        "- usar palavras mais específicas\n"
+        "- pesquisar em menos arquivos\n"
+        "- trocar uma pergunta longa por termos objetivos\n"
+        "- mudar o modo de busca para Híbrida"
     )
 
 
 def obter_score_principal(resultado: dict, modo_busca: str) -> tuple[str, float]:
     """
     Define qual score principal deve ser exibido.
-    Se houver reranking, o score final passa a ser o principal.
     """
     if "score_final_rerankeado" in resultado:
         return "Score final", float(resultado.get("score_final_rerankeado", 0.0))
@@ -123,23 +128,66 @@ def formatar_paginas(paginas: list[int]) -> str:
     return ", ".join(str(pagina) for pagina in paginas)
 
 
+def contar_arquivos_unicos(resultados: list[dict]) -> int:
+    """
+    Conta quantos arquivos diferentes aparecem nos resultados.
+    """
+    return len({resultado["arquivo"] for resultado in resultados})
+
+
+def contar_paginas_unicas(resultados: list[dict]) -> int:
+    """
+    Conta quantas páginas diferentes aparecem nos resultados.
+    """
+    return len(
+        {
+            (resultado["arquivo"], resultado["pagina"])
+            for resultado in resultados
+        }
+    )
+
+
+def renderizar_resumo_resultados(resultados: list[dict], modo_busca: str) -> None:
+    """
+    Exibe um resumo curto da busca executada.
+    """
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Resultados retornados", len(resultados))
+
+    with col2:
+        st.metric("Arquivos com evidências", contar_arquivos_unicos(resultados))
+
+    with col3:
+        st.metric("Páginas citadas", contar_paginas_unicas(resultados))
+
+    st.caption(f"Modo de busca utilizado: {modo_busca}")
+
+
 def renderizar_fontes_utilizadas(fontes: list[dict]) -> None:
     """
     Exibe a lista de fontes usadas na resposta sugerida.
     """
-    st.markdown("**Fontes usadas na resposta**")
+    if not fontes:
+        return
 
-    for fonte in fontes:
-        paginas = formatar_paginas(fonte["paginas"])
-        st.markdown(
-            f"- `{fonte['arquivo']}` • páginas {paginas} • trechos usados: {fonte['quantidade_trechos']}"
-        )
+    with st.expander("Fontes usadas na resposta", expanded=True):
+        for fonte in fontes:
+            paginas = formatar_paginas(fonte["paginas"])
+            st.markdown(
+                f"- `{fonte['arquivo']}` • páginas {paginas} • "
+                f"trechos usados: {fonte['quantidade_trechos']}"
+            )
 
 
 def renderizar_trechos_apoio(trechos_apoio: list[dict], pergunta: str) -> None:
     """
     Exibe os trechos que sustentam a resposta sugerida.
     """
+    if not trechos_apoio:
+        return
+
     with st.expander("Ver trechos de apoio", expanded=False):
         for posicao, resultado in enumerate(trechos_apoio, start=1):
             st.markdown(
@@ -154,7 +202,7 @@ def renderizar_trechos_apoio(trechos_apoio: list[dict], pergunta: str) -> None:
 
 def renderizar_resposta_sugerida(resultados: list[dict], pergunta: str) -> None:
     """
-    Exibe uma resposta curta baseada nos resultados reranqueados,
+    Exibe uma resposta curta baseada nos resultados recuperados,
     com fontes e trechos de apoio.
     """
     resposta = gerar_resposta_com_evidencias(
@@ -236,6 +284,11 @@ def renderizar_resultados_busca(
     if not resultados:
         renderizar_estado_sem_resultados()
         return
+
+    renderizar_resumo_resultados(
+        resultados=resultados,
+        modo_busca=modo_busca,
+    )
 
     renderizar_resposta_sugerida(
         resultados=resultados,

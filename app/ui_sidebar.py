@@ -25,6 +25,18 @@ def calcular_max_overlap(tamanho_chunk: int) -> int:
     return max(0, min(MAX_CHUNK_OVERLAP, tamanho_chunk - 1))
 
 
+def obter_descricao_modo_busca(modo_busca: str) -> str:
+    """
+    Retorna uma descrição curta do modo de busca selecionado.
+    """
+    descricoes = {
+        "Lexical": "Melhor para localizar termos exatos, nomes, cláusulas e palavras específicas.",
+        "Semântica": "Melhor para encontrar trechos parecidos em significado, mesmo com palavras diferentes.",
+        "Híbrida": "Combina correspondência textual com similaridade semântica para um resultado mais equilibrado.",
+    }
+    return descricoes.get(modo_busca, "")
+
+
 def renderizar_sidebar() -> dict[str, float | int | str]:
     """
     Renderiza a barra lateral com as configurações da aplicação.
@@ -37,12 +49,15 @@ def renderizar_sidebar() -> dict[str, float | int | str]:
         index=SEARCH_MODES.index(DEFAULT_SEARCH_MODE),
     )
 
+    st.sidebar.caption(obter_descricao_modo_busca(modo_busca))
+
     tamanho_chunk = st.sidebar.slider(
         "Tamanho do chunk (palavras)",
         min_value=MIN_CHUNK_SIZE,
         max_value=MAX_CHUNK_SIZE,
         value=DEFAULT_CHUNK_SIZE,
         step=50,
+        help="Chunks menores tendem a ser mais específicos. Chunks maiores preservam mais contexto.",
     )
 
     max_overlap = calcular_max_overlap(tamanho_chunk)
@@ -54,6 +69,7 @@ def renderizar_sidebar() -> dict[str, float | int | str]:
         max_value=max_overlap,
         value=overlap_padrao,
         step=10 if max_overlap >= 10 else 1,
+        help="Mantém continuidade entre trechos vizinhos para reduzir perda de contexto.",
     )
 
     top_k = st.sidebar.slider(
@@ -62,6 +78,7 @@ def renderizar_sidebar() -> dict[str, float | int | str]:
         max_value=MAX_TOP_K,
         value=DEFAULT_TOP_K,
         step=1,
+        help="Quantidade máxima de resultados exibidos na busca.",
     )
 
     quantidade_chunks_visiveis = st.sidebar.slider(
@@ -90,6 +107,12 @@ def renderizar_sidebar() -> dict[str, float | int | str]:
             f"Peso lexical: {int(peso_lexical * 100)}% | "
             f"Peso semântico: {int(peso_semantico * 100)}%"
         )
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption(
+        "Dica: para perguntas abertas, use Híbrida. "
+        "Para localizar expressão exata, use Lexical."
+    )
 
     return {
         "modo_busca": modo_busca,

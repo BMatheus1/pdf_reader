@@ -207,14 +207,145 @@ def carregar_modelo_semantico_cached(
     return carregar_modelo_embeddings(nome_modelo=nome_modelo)
 
 
-def calcular_top_k_inicial(
+def modo_busca_exige_reranking(modo_busca: str) -> bool:
+    """
+    Define se o modo de busca deve passar por reranking.
+    """
+    return modo_busca in {"Semântica", "Híbrida"}
+
+
+def calcular_top_k_recuperacao_inicial(
+    modo_busca: str,
     top_k_final: int,
     multiplicador_candidatos: int,
 ) -> int:
     """
-    Define quantos candidatos devem ser recuperados antes do reranking.
+    Define quantos candidatos devem ser recuperados antes da etapa final.
+    No modo lexical, devolvemos apenas o top_k final porque não há reranking.
     """
+    if not modo_busca_exige_reranking(modo_busca):
+        return top_k_final
+
     return max(top_k_final, top_k_final * multiplicador_candidatos)
+
+
+def anexar_metadados_consulta(
+    resultados: list[dict[str, Any]],
+    analise_pergunta: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Anexa aos resultados os metadados derivados da pergunta.
+    Isso mantém a UI consistente mesmo quando não existe reranking.
+    """
+    resultados_enriquecidos: list[dict[str, Any]] = []
+
+    for resultado in resultados:
+        item = dict(resultado)
+        item.update(
+            {
+                "intencao_pergunta": analise_pergunta.get("intencao", "geral"),
+                "descricao_intencao": analise_pergunta.get("descricao_intencao", ""),
+                "estilo_resposta": analise_pergunta.get("estilo_resposta", "objetiva"),
+            }
+        )
+        resultados_enriquecidos.append(item)
+
+    return resultados_enriquecidos
+
+
+def executar_busca_lexical(
+    analise_pergunta: dict[str, Any],
+    chunks: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """
+    Executa a busca lexical pura, sem reranking.
+    """
+    resultados = buscar_chunks_lexical(
+        pergunta=analise_pergunta["consulta_lexical"],
+        chunks=chunks,
+        top_k=top_k,
+    )
+    return anexar_metadados_consulta(
+        resultados=resultados,
+        analise_pergunta=analise_pergunta,
+    )
+
+
+def executar_busca_semantica(
+    analise_pergunta: dict[str, Any],
+    chunks: list[dict[str, Any]],
+    embeddings_chunks: np.ndarray,
+    top_k_inicial: int,
+    nome_modelo: str,
+) -> list[dict[str, Any]]:
+    """
+    Executa a recuperação inicial semântica.
+    """
+    modelo = carregar_modelo_semantico_cached(nome_modelo)
+    return buscar_chunks_semantico(
+        pergunta=analise_pergunta["consulta_semantica"],
+        chunks=chunks,
+        embeddings_chunks=embeddings_chunks,
+        modelo=modelo,
+        top_k=top_k_inicial,
+    )
+
+
+def executar_busca_hibrida(
+    analise_pergunta: dict[str, Any],
+    chunks: list[dict[str, Any]],
+    embeddings_chunks: np.ndarray,
+    top_k: int,
+    peso_lexical: float,
+    peso_semantico: float,
+    nome_modelo: str,
+) -> list[dict[str, Any]]:
+    """
+    Executa a recuperação inicial híbrida.
+    """
+    modelo = carregar_modelo_semantico_cached(nome_modelo)
+    return buscar_chunks_hibrido(
+        pergunta=analise_pergunta["pergunta_original"],
+        pergunta_lexical=analise_pergunta["consulta_lexical"],
+        pergunta_semantica=analise_pergunta["consulta_semantica"],
+        chunks=chunks,
+        embeddings_chunks=embeddings_chunks,
+        modelo=modelo,
+        top_k=top_k,
+        peso_lexical=peso_lexical,
+        peso_semantico=peso_semantico,
+        multiplicador_candidatos=int(analise_pergunta["multiplicador_candidatos"]),
+    )
+
+
+def aplicar_etapa_final_busca(
+    modo_busca: str,
+    resultados_iniciais: list[dict[str, Any]],
+    analise_pergunta: dict[str, Any],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """
+    Aplica a etapa final da busca.
+    - Lexical: apenas enriquece os resultados com metadados da consulta.
+    - Semântica/Híbrida: aplica reranking.
+    """
+    if not resultados_iniciais:
+        return []
+
+    if not modo_busca_exige_reranking(modo_busca):
+        return anexar_metadados_consulta(
+            resultados=resultados_iniciais[:top_k],
+            analise_pergunta=analise_pergunta,
+        )
+
+    return reranquear_resultados(
+        pergunta=analise_pergunta["pergunta_original"],
+        resultados=resultados_iniciais,
+        analise_pergunta=analise_pergunta,
+        top_k=top_k,
+        nome_modelo=DEFAULT_RERANKER_MODEL,
+    )
 
 
 def executar_busca_documentos(
@@ -228,10 +359,12 @@ def executar_busca_documentos(
     nome_modelo: str = DEFAULT_EMBEDDING_MODEL,
 ) -> list[dict[str, Any]]:
     """
-    Executa a busca em três etapas:
-    1) entendimento da pergunta
-    2) recuperação inicial de candidatos
-    3) reranking final dos melhores candidatos
+    Executa a busca completa.
+
+    Fluxo:
+    1. entende a pergunta
+    2. recupera candidatos conforme o modo de busca
+    3. aplica a etapa final (com ou sem reranking)
     """
     if not pergunta or not pergunta.strip():
         return []
@@ -240,65 +373,58 @@ def executar_busca_documentos(
         return []
 
     analise_pergunta = analisar_pergunta(pergunta)
-    top_k_inicial = calcular_top_k_inicial(
+    top_k_inicial = calcular_top_k_recuperacao_inicial(
+        modo_busca=modo_busca,
         top_k_final=top_k,
         multiplicador_candidatos=int(analise_pergunta["multiplicador_candidatos"]),
     )
 
     if modo_busca == "Lexical":
-        resultados_iniciais = buscar_chunks_lexical(
-            pergunta=analise_pergunta["consulta_lexical"],
+        resultados_iniciais = executar_busca_lexical(
+            analise_pergunta=analise_pergunta,
             chunks=chunks,
             top_k=top_k_inicial,
         )
-        return reranquear_resultados(
-            pergunta=analise_pergunta["pergunta_original"],
-            resultados=resultados_iniciais,
+        return aplicar_etapa_final_busca(
+            modo_busca=modo_busca,
+            resultados_iniciais=resultados_iniciais,
             analise_pergunta=analise_pergunta,
             top_k=top_k,
-            nome_modelo=DEFAULT_RERANKER_MODEL,
         )
 
     if embeddings_chunks is None or embeddings_chunks.size == 0:
         return []
 
-    modelo = carregar_modelo_semantico_cached(nome_modelo)
-
     if modo_busca == "Semântica":
-        resultados_iniciais = buscar_chunks_semantico(
-            pergunta=analise_pergunta["consulta_semantica"],
+        resultados_iniciais = executar_busca_semantica(
+            analise_pergunta=analise_pergunta,
             chunks=chunks,
             embeddings_chunks=embeddings_chunks,
-            modelo=modelo,
-            top_k=top_k_inicial,
+            top_k_inicial=top_k_inicial,
+            nome_modelo=nome_modelo,
         )
-        return reranquear_resultados(
-            pergunta=analise_pergunta["pergunta_original"],
-            resultados=resultados_iniciais,
+        return aplicar_etapa_final_busca(
+            modo_busca=modo_busca,
+            resultados_iniciais=resultados_iniciais,
             analise_pergunta=analise_pergunta,
             top_k=top_k,
-            nome_modelo=DEFAULT_RERANKER_MODEL,
         )
 
     if modo_busca == "Híbrida":
-        resultados_iniciais = buscar_chunks_hibrido(
-            pergunta=analise_pergunta["pergunta_original"],
-            pergunta_lexical=analise_pergunta["consulta_lexical"],
-            pergunta_semantica=analise_pergunta["consulta_semantica"],
+        resultados_iniciais = executar_busca_hibrida(
+            analise_pergunta=analise_pergunta,
             chunks=chunks,
             embeddings_chunks=embeddings_chunks,
-            modelo=modelo,
             top_k=top_k,
             peso_lexical=peso_lexical,
             peso_semantico=peso_semantico,
-            multiplicador_candidatos=int(analise_pergunta["multiplicador_candidatos"]),
+            nome_modelo=nome_modelo,
         )
-        return reranquear_resultados(
-            pergunta=analise_pergunta["pergunta_original"],
-            resultados=resultados_iniciais,
+        return aplicar_etapa_final_busca(
+            modo_busca=modo_busca,
+            resultados_iniciais=resultados_iniciais,
             analise_pergunta=analise_pergunta,
             top_k=top_k,
-            nome_modelo=DEFAULT_RERANKER_MODEL,
         )
 
     return []

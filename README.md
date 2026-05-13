@@ -1,30 +1,34 @@
 # PDF Reader Inteligente
 
-Aplicação em **Streamlit** para leitura e busca em PDFs com foco em uso prático no dia a dia.
+Aplicação web em **Streamlit** para pesquisar informações em **um ou mais PDFs** com foco em uso prático no dia a dia.
 
-O projeto permite enviar um ou mais arquivos PDF, gerar índices locais e pesquisar trechos relevantes usando três modos de busca:
+O sistema processa os documentos, gera índices locais e permite buscar trechos relevantes em três modos:
 
-- **Lexical**: encontra termos e frases presentes no texto
-- **Semântica**: encontra trechos parecidos em significado
-- **Híbrida**: combina busca lexical e semântica para melhorar relevância
+- **Lexical**: busca termos exatos e palavras presentes no texto
+- **Semântica**: busca trechos parecidos em significado
+- **Híbrida**: combina busca textual e semântica para melhorar relevância
 
 ---
 
-## Objetivo do projeto
+## Visão geral
 
-Este projeto foi construído para ser um **leitor inteligente de PDFs**, útil para:
+O objetivo do projeto é transformar documentos longos em uma base consultável de forma rápida, clara e rastreável.
 
-- estudar materiais extensos
-- localizar rapidamente cláusulas, trechos e informações importantes
-- pesquisar contratos, relatórios, artigos e documentos longos
-- servir como base para uma futura aplicação de RAG
+A aplicação foi pensada para cenários como:
 
-O foco é unir:
+- leitura de contratos
+- consulta de cláusulas e prazos
+- análise de relatórios e documentos extensos
+- estudo de materiais em PDF
+- recuperação de informação com evidência de origem
 
-- **código limpo**
-- **boa manutenção**
-- **experiência de uso clara**
-- **valor real no dia a dia**
+Além da busca, o app entrega:
+
+- **resposta curta em linguagem natural**
+- **fontes usadas na resposta**
+- **trechos de apoio destacados**
+- **página e arquivo de origem**
+- **cache local para evitar reprocessamento**
 
 ---
 
@@ -32,26 +36,30 @@ O foco é unir:
 
 - Upload de **múltiplos PDFs**
 - Extração de texto por página
-- Divisão em **chunks com overlap**
+- Geração de **chunks com overlap**
 - Busca **lexical**
 - Busca **semântica com embeddings**
-- Busca **híbrida com reranking**
-- Exibição da **origem do trecho**
+- Busca **híbrida**
+- **Reranking** dos melhores candidatos
+- Resposta curta com **evidências rastreáveis**
 - Filtro por arquivo
 - Cache persistente de:
   - documentos processados
-  - embeddings por documento
-- Resumo dos documentos processados
-- Interface em abas para busca e inspeção dos PDFs
+  - embeddings
+  - metadados de indexação
+- Interface com abas para:
+  - busca
+  - inspeção dos documentos processados
 
 ---
 
-## Estrutura do projeto
+## Arquitetura do projeto
 
 ```txt
 pdf_reader/
 ├── app/
 │   ├── __init__.py
+│   ├── answer_service.py
 │   ├── app_service.py
 │   ├── chunking.py
 │   ├── config.py
@@ -60,6 +68,8 @@ pdf_reader/
 │   ├── index_storage.py
 │   ├── ingest.py
 │   ├── lexical_search.py
+│   ├── query_understanding.py
+│   ├── reranking_service.py
 │   ├── search_eval_cases.py
 │   ├── search_service.py
 │   ├── ui.py
@@ -67,11 +77,6 @@ pdf_reader/
 │   ├── ui_results.py
 │   └── ui_sidebar.py
 ├── tests/
-│   ├── conftest.py
-│   ├── test_chunking.py
-│   ├── test_lexical_search.py
-│   └── test_search_service.py
-├── .gitignore
 ├── README.md
 └── requirements.txt
 ```

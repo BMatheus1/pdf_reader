@@ -8,6 +8,12 @@ from lexical_search import extrair_termos_relevantes, normalizar_texto
 ResultadoBusca = dict[str, Any]
 
 
+RESPOSTA_SEM_RESULTADOS = (
+    "Não encontrei evidências suficientes para responder com segurança com base "
+    "nos trechos recuperados."
+)
+
+
 def limpar_espacos(texto: str) -> str:
     """
     Remove espaços duplicados e quebras de linha desnecessárias.
@@ -37,11 +43,45 @@ def obter_score_base_resultado(resultado: ResultadoBusca) -> float:
     """
     Retorna o score mais relevante disponível no resultado.
     """
-    for campo in ("score_hibrido", "score_semantico", "score"):
+    for campo in (
+        "score_final_rerankeado",
+        "score_hibrido",
+        "score_semantico",
+        "score",
+    ):
         if campo in resultado:
             return float(resultado.get(campo, 0.0))
 
     return 0.0
+
+
+def contar_termos_encontrados(
+    frase_normalizada: str,
+    termos_busca: list[str],
+) -> list[str]:
+    """
+    Retorna os termos da busca encontrados na frase.
+    """
+    return [
+        termo
+        for termo in termos_busca
+        if re.search(rf"(?<!\w){re.escape(termo)}(?!\w)", frase_normalizada)
+    ]
+
+
+def frase_eh_valida_para_resposta(frase: str) -> bool:
+    """
+    Remove frases muito curtas ou pouco informativas da síntese final.
+    """
+    frase_limpa = limpar_espacos(frase)
+
+    if len(frase_limpa) < 25:
+        return False
+
+    if len(frase_limpa.split()) < 4:
+        return False
+
+    return True
 
 
 def pontuar_frase(
@@ -57,11 +97,10 @@ def pontuar_frase(
     if not frase_normalizada:
         return 0.0
 
-    termos_encontrados = [
-        termo
-        for termo in termos_busca
-        if re.search(rf"(?<!\w){re.escape(termo)}(?!\w)", frase_normalizada)
-    ]
+    termos_encontrados = contar_termos_encontrados(
+        frase_normalizada=frase_normalizada,
+        termos_busca=termos_busca,
+    )
 
     if not termos_encontrados:
         return 0.0
@@ -99,11 +138,14 @@ def resumir_trecho_para_resposta(
 def extrair_frases_evidencia(
     pergunta: str,
     resultados: list[ResultadoBusca],
-    max_frases: int = 3,
+    max_frases: int = 5,
 ) -> list[dict[str, Any]]:
     """
-    Extrai as melhores frases dos resultados para compor uma resposta curta e rastreável.
+    Extrai frases candidatas à resposta curta.
     """
+    if not resultados:
+        return []
+
     termos_busca = extrair_termos_relevantes(pergunta)
     candidatas: list[dict[str, Any]] = []
     frases_vistas: set[str] = set()
@@ -114,6 +156,9 @@ def extrair_frases_evidencia(
         for frase in quebrar_em_frases(resultado.get("chunk", "")):
             frase_limpa = limpar_espacos(frase)
             frase_chave = normalizar_texto(frase_limpa)
+
+            if not frase_eh_valida_para_resposta(frase_limpa):
+                continue
 
             if not frase_chave or frase_chave in frases_vistas:
                 continue
@@ -146,45 +191,78 @@ def extrair_frases_evidencia(
     return candidatas[:max_frases]
 
 
+def selecionar_frases_para_resposta(
+    frases_evidencia: list[dict[str, Any]],
+    max_frases: int = 2,
+) -> list[dict[str, Any]]:
+    """
+    Seleciona frases para a resposta curta de forma conservadora.
+    A síntese usa a melhor frase e, se possível, complementa com outra do mesmo arquivo.
+    """
+    if not frases_evidencia:
+        return []
+
+    principal = frases_evidencia[0]
+    selecionadas = [principal]
+
+    for candidata in frases_evidencia[1:]:
+        if candidata["arquivo"] != principal["arquivo"]:
+            continue
+
+        if candidata["texto"] == principal["texto"]:
+            continue
+
+        selecionadas.append(candidata)
+
+        if len(selecionadas) >= max_frases:
+            break
+
+    return selecionadas
+
+
 def montar_resposta_curta(
     pergunta: str,
     resultados: list[ResultadoBusca],
-    max_frases: int = 3,
+    max_frases: int = 2,
 ) -> str:
     """
     Monta uma resposta curta em linguagem natural com base nas evidências mais fortes.
+    A lógica é conservadora para evitar juntar trechos de contextos diferentes.
     """
+    if not resultados:
+        return RESPOSTA_SEM_RESULTADOS
+
     frases_evidencia = extrair_frases_evidencia(
         pergunta=pergunta,
         resultados=resultados,
+        max_frases=max(max_frases, 4),
+    )
+    frases_resposta = selecionar_frases_para_resposta(
+        frases_evidencia=frases_evidencia,
         max_frases=max_frases,
     )
 
-    if frases_evidencia:
-        trechos = [item["texto"] for item in frases_evidencia]
+    if frases_resposta:
+        trechos = [item["texto"] for item in frases_resposta]
 
         if len(trechos) == 1:
-            return (
-                "Com base nos trechos mais relevantes encontrados, o documento indica que "
-                f"{trechos[0]}"
-            )
+            return f"O trecho mais forte encontrado indica que {trechos[0]}"
 
         resposta = " ".join(trechos)
-        return (
-            "Com base nos trechos mais relevantes encontrados, os documentos indicam que "
-            f"{resposta}"
-        )
+        return f"Os trechos mais fortes do mesmo documento indicam que {resposta}"
 
     primeiro_resultado = resultados[0]
     trecho_fallback = resumir_trecho_para_resposta(
         primeiro_resultado.get("chunk", "")
     )
 
-    return (
-        "Encontrei trechos relacionados à sua pergunta, mas não foi possível sintetizar "
-        "uma frase completa com boa confiança. "
-        f"O trecho mais forte encontrado foi: {trecho_fallback}"
-    )
+    if trecho_fallback:
+        return (
+            "Encontrei um trecho relacionado, mas não foi possível gerar uma síntese "
+            f"confiável. O melhor trecho encontrado foi: {trecho_fallback}"
+        )
+
+    return RESPOSTA_SEM_RESULTADOS
 
 
 def consolidar_fontes(
@@ -214,8 +292,7 @@ def consolidar_fontes(
 
     fontes = list(fontes_por_arquivo.values())
     fontes.sort(
-        key=lambda item: (item["quantidade_trechos"], -min(item["paginas"])),
-        reverse=True,
+        key=lambda item: (-item["quantidade_trechos"], min(item["paginas"])),
     )
 
     for fonte in fontes:
@@ -237,13 +314,19 @@ def selecionar_trechos_apoio(
 def gerar_resposta_com_evidencias(
     pergunta: str,
     resultados: list[ResultadoBusca],
-    max_frases_resposta: int = 3,
+    max_frases_resposta: int = 2,
     max_fontes: int = 5,
     max_trechos_apoio: int = 3,
 ) -> dict[str, Any]:
     """
     Gera uma estrutura pronta para a UI renderizar resposta, fontes e trechos de apoio.
     """
+    frases_evidencia = extrair_frases_evidencia(
+        pergunta=pergunta,
+        resultados=resultados,
+        max_frases=max(max_frases_resposta, 4),
+    )
+
     return {
         "resposta_curta": montar_resposta_curta(
             pergunta=pergunta,
@@ -258,9 +341,5 @@ def gerar_resposta_com_evidencias(
             resultados=resultados,
             max_trechos=max_trechos_apoio,
         ),
-        "frases_evidencia": extrair_frases_evidencia(
-            pergunta=pergunta,
-            resultados=resultados,
-            max_frases=max_frases_resposta,
-        ),
+        "frases_evidencia": frases_evidencia[:max_frases_resposta],
     }
